@@ -1,0 +1,26 @@
+language: python
+python: 3.6
+sudo: false
+env:
+ - TOXENV=py36
+
+install:
+    - sudo apt-get install python-tk
+    - sudo apt-get install pandoc
+    - pip install travis-sphinx
+    - pip install http://download.pytorch.org/whl/cpu/torch-0.3.0.post4-cp36-cp36m-linux_x86_64.whl 
+    - pip install -r requirements.txt
+
+before_script:
+    - "export DISPLAY=:99"
+    - "sh -e /etc/init.d/xvfb start"
+    - sleep 3
+script:
+    - travis-sphinx build --source=source/
+
+after_success:
+    - travis-sphinx deploy
+
+cache:
+  directories:
+    - $HOME/.cache/pip
