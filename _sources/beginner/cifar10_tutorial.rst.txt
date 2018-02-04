@@ -1,0 +1,782 @@
+
+
+.. _sphx_glr_beginner_cifar10_tutorial.py:
+
+
+Training a Convolutional Neural Network for Image Classification
+================================================================
+
+*Tutorial adapted from http://pytorch.org/tutorials/beginner/blitz/cifar10_tutorial.html*
+
+Generally, when you have to deal with image, text, audio or video data,
+you can use standard python packages that load data into a numpy array.
+Then you can convert this array into a ``torch.*Tensor``.
+
+-  For images, packages such as Pillow, OpenCV are useful.
+-  For audio, packages such as scipy and librosa
+-  For text, either raw Python or Cython based loading, or NLTK and
+   SpaCy are useful.
+
+For this tutorial, we will use the CIFAR10 dataset. It has the classes:
+``airplane``, ``automobile``, ``bird``, ``cat``, ``deer``, ``dog``,
+``frog``, ``horse``, ``ship``, ``truck``. The images in CIFAR-10 are of
+size 3x32x32, i.e. 3-channel color images of 32x32 pixels in size.
+
+.. figure:: /_static/cifar10.png
+   :alt: cifar
+
+   cifar
+
+Training an image classifier
+----------------------------
+
+We will do the following steps in order:
+
+1. Import libraries and add model settings
+2. Load and normalizing the CIFAR10 training and test datasets using
+   ``torchvision``
+3. Define a Convolution Neural Network (forward)
+4. Train the network on the training data
+5. Test the network on the test data
+
+
+
+1. Importing and Declaring Global Variables
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+We start be importing all libraries that will be required in this
+tutorial.
+
+
+
+
+.. code-block:: python
+
+
+    from __future__ import print_function
+
+    import torch
+    import torchvision
+    import torchvision.transforms as transforms
+    from torch.autograd import Variable
+    import torch.nn as nn
+    import torch.optim as optim
+    import torch.nn.functional as F
+
+    from cogitare.data import DataSet, AsyncDataLoader
+    from cogitare import utils, Model
+    from cogitare.plugins import EarlyStopping
+    from cogitare.metrics.classification import accuracy
+    import cogitare
+
+    import argparse
+
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    parser = argparse.ArgumentParser()
+    pa = parser.add_argument  # define a shortcut
+
+    pa('--batch-size', help='Size of the training batch', type=int, default=64)
+    pa('--cuda', help='enable cuda', action='store_true')
+    pa('--dropout', help='dropout rate in the input data', type=float, default=0.3)
+    pa('--learning-rate', help='learning rate', type=float, default=0.001)
+    pa('--max-epochs', help='limit the number of epochs in training', type=int, default=10)
+
+
+    # load the model arguments
+    try:
+        args = parser.parse_args()
+    except:
+        args = parser.parse_args([])
+
+
+    cogitare.utils.set_cuda(args.cuda)
+
+    CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+
+
+
+
+
+
+
+2. Loading and normalizing CIFAR10
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Using ``torchvision``, it’s extremely easy to load CIFAR10.
+
+
+
+
+.. code-block:: python
+
+
+    # The output of torchvision datasets are PILImage images of range [0, 1].
+    # We transform them to Tensors of normalized range [-1, 1]
+    transform = transforms.Compose(
+        [transforms.ToTensor(),
+         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+
+    # load the CIFAR 10 data
+    trainset = torchvision.datasets.CIFAR10(root='./data', train=True, 
+                                            download=True, transform=transform)
+
+    testset = torchvision.datasets.CIFAR10(root='./data', train=False, 
+                                           download=True, transform=transform)
+
+    print(type(trainset.train_data))
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    Downloading https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz to ./data/cifar-10-python.tar.gz
+    Files already downloaded and verified
+    <class 'numpy.ndarray'>
+
+
+Torchvision loads the data as numpy arrays.
+
+We now create two datasets to hold the train and test sets.
+
+
+
+
+.. code-block:: python
+
+
+    print(type(trainset.train_data))
+
+    print(type(trainset.train_labels))
+
+    def batch2variable(batch):
+        data, label = batch
+        data = utils.to_tensor(data)
+    
+        # B x W x H x C to B x C x W x W
+        data = data.transpose(1, 2).transpose(1, 3)
+    
+        return utils.to_variable(data, dtype=torch.FloatTensor), utils.to_variable(label)
+
+    # convert the trainset.train_labels to LongTensor, instead of python list
+
+    data_train = DataSet([trainset.train_data, torch.LongTensor(trainset.train_labels)],
+                         batch_size=args.batch_size,
+                         drop_last=True)
+
+    # use the async loader, to pre-load 8 batches ahead of the model
+    # each batch is then loaded and moved to a torch Variable
+    data_train = AsyncDataLoader(data_train, buffer_size=args.batch_size * 8,
+                                 on_batch_loaded=batch2variable)
+
+    data_test = DataSet([testset.test_data, torch.LongTensor(testset.test_labels)],
+                        batch_size=args.batch_size,
+                        drop_last=True)
+    data_test = AsyncDataLoader(data_test, buffer_size=args.batch_size * 8,
+                                on_batch_loaded=batch2variable)
+
+    # fill the data buffer
+    data_train.cache()
+    data_test.cache()
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    <class 'numpy.ndarray'>
+    <class 'list'>
+
+
+The train and test datasets are defined as a collection of tuples, each
+tuple contains ``(data, expected label)``.
+
+
+
+
+.. code-block:: python
+
+
+    print(next(data_train))
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    (Variable containing:
+    (0 ,0 ,.,.) = 
+      133  131  127  ...   167  154  142
+      135  121  119  ...   180  163  143
+      129  122  122  ...   148  122   95
+          ...         ⋱        ...      
+      122  124  124  ...   152  147  122
+      113  119  124  ...   127  112  111
+       94   96  113  ...   102  104  107
+
+    (0 ,1 ,.,.) = 
+      115  106  106  ...   154  142  133
+      112   92   93  ...   166  150  131
+      102   87   91  ...   131  107   80
+          ...         ⋱        ...      
+      105  103   99  ...   119  112   94
+       94   96   98  ...    97   84   88
+       76   74   87  ...    80   85   88
+
+    (0 ,2 ,.,.) = 
+       81   79   80  ...   129  119  114
+       84   71   73  ...   134  124  116
+       79   70   77  ...    97   81   68
+          ...         ⋱        ...      
+       77   77   75  ...    95   83   65
+       69   76   82  ...    70   58   64
+       53   57   75  ...    53   63   71
+         ⋮ 
+
+    (1 ,0 ,.,.) = 
+      216  196  209  ...    63  144  177
+      227  215  204  ...   100  137  175
+      218  223  213  ...    95  112  160
+          ...         ⋱        ...      
+       22   43   57  ...   209  201  203
+       23   31   53  ...   236  228  227
+       27   23   47  ...   251  249  245
+
+    (1 ,1 ,.,.) = 
+      216  196  209  ...    63  144  177
+      227  215  204  ...   100  137  175
+      218  223  213  ...    95  112  160
+          ...         ⋱        ...      
+       22   43   57  ...   209  201  203
+       23   31   53  ...   236  228  227
+       27   23   47  ...   251  249  245
+
+    (1 ,2 ,.,.) = 
+      216  196  209  ...    63  144  177
+      227  215  204  ...   100  137  175
+      218  223  213  ...    95  112  160
+          ...         ⋱        ...      
+       22   43   57  ...   209  201  203
+       23   31   53  ...   236  228  227
+       27   23   47  ...   251  249  245
+         ⋮ 
+
+    (2 ,0 ,.,.) = 
+      254  253  225  ...   241  247  246
+      250  246  181  ...   180  241  241
+      250  231  126  ...   102  218  242
+          ...         ⋱        ...      
+       51   59   62  ...    53   57   61
+       53   63   64  ...    55   57   63
+       60   62   64  ...    55   52   57
+
+    (2 ,1 ,.,.) = 
+      255  255  238  ...   246  251  251
+      254  253  194  ...   192  250  247
+      255  240  142  ...   121  230  249
+          ...         ⋱        ...      
+       88   86   83  ...    89   78   77
+       87   86   83  ...    88   78   78
+       88   85   82  ...    79   70   71
+
+    (2 ,2 ,.,.) = 
+      255  255  241  ...   255  255  255
+      253  254  203  ...   205  252  251
+      254  243  157  ...   142  237  254
+          ...         ⋱        ...      
+      113  102   97  ...   111  104   96
+      111  105  101  ...   112  103   97
+      111  105   98  ...   104   99   96
+    ...   
+         ⋮ 
+
+    (61,0 ,.,.) = 
+      255  177   72  ...     2    0    0
+      255  182  110  ...     1    0    0
+      255  194   88  ...     0    0    0
+          ...         ⋱        ...      
+      103   60   78  ...    67   52   27
+       97   59   69  ...    63   47   25
+      119   91   90  ...    54   43   22
+
+    (61,1 ,.,.) = 
+      255  219  159  ...     1    0    0
+      255  220  183  ...     1    0    0
+      255  224  159  ...     1    0    0
+          ...         ⋱        ...      
+      122   80   97  ...    90   74   39
+      112   75   83  ...    84   66   35
+      131  104  102  ...    67   55   29
+
+    (61,2 ,.,.) = 
+      255  235  190  ...     0    0    0
+      255  233  209  ...     1    0    0
+      255  231  182  ...     1    0    0
+          ...         ⋱        ...      
+      139  105  118  ...   113   90   50
+      131  101  106  ...   101   81   44
+      148  125  117  ...    77   64   35
+         ⋮ 
+
+    (62,0 ,.,.) = 
+       86   69   45  ...    30   31   34
+       64   56   41  ...    29   29   31
+       56   56   45  ...    30   27   31
+          ...         ⋱        ...      
+      117  119  113  ...   133  132  134
+      113  113  111  ...   119  124  129
+      107   98   98  ...   117  119  113
+
+    (62,1 ,.,.) = 
+       78   65   51  ...    45   46   49
+       61   57   48  ...    42   43   46
+       53   56   48  ...    41   40   46
+          ...         ⋱        ...      
+      132  136  130  ...   150  154  156
+      123  128  128  ...   137  141  144
+      115  110  113  ...   121  130  126
+
+    (62,2 ,.,.) = 
+       65   56   51  ...    48   49   52
+       49   47   45  ...    46   46   49
+       43   47   43  ...    45   44   49
+          ...         ⋱        ...      
+       93   98   95  ...   121  112  120
+       86   88   90  ...    97   99  110
+       80   74   78  ...    88   93   94
+         ⋮ 
+
+    (63,0 ,.,.) = 
+      130  139  150  ...   136  126  116
+      126  138  156  ...   124  120  115
+      131  142  155  ...   120  114  119
+          ...         ⋱        ...      
+      154  150  137  ...   183  155  135
+      157  145  142  ...   172  153  131
+      142  138  145  ...   155  153  126
+
+    (63,1 ,.,.) = 
+      106  115  126  ...   119  105   92
+      105  117  135  ...   105   99   91
+      115  125  138  ...    99   93   96
+          ...         ⋱        ...      
+      144  132  119  ...   164  145  130
+      142  128  126  ...   152  142  128
+      123  122  131  ...   136  142  123
+
+    (63,2 ,.,.) = 
+       76   85   96  ...    89   79   66
+       73   86  104  ...    79   77   68
+       82   93  106  ...    77   75   75
+          ...         ⋱        ...      
+      109  100   87  ...   131  106   88
+      109   96   93  ...   119  105   88
+       91   89   98  ...   104  108   85
+    [torch.FloatTensor of size 64x3x32x32]
+    , Variable containing:
+     6
+     3
+     3
+     4
+     9
+     3
+     5
+     2
+     4
+     1
+     6
+     1
+     4
+     8
+     7
+     3
+     0
+     6
+     1
+     9
+     0
+     8
+     1
+     7
+     1
+     5
+     9
+     4
+     9
+     7
+     5
+     9
+     6
+     1
+     9
+     9
+     5
+     0
+     3
+     3
+     9
+     3
+     8
+     5
+     2
+     8
+     5
+     3
+     9
+     0
+     4
+     7
+     3
+     6
+     8
+     1
+     7
+     9
+     8
+     3
+     8
+     8
+     4
+     5
+    [torch.LongTensor of size 64]
+    )
+
+
+2.1 Data Visualization
+----------------------
+
+Let us show some of the training images, for fun.
+
+
+
+
+.. code-block:: python
+
+
+    def imshow(img):
+        npimg = img.cpu().numpy()
+        plt.imshow(np.transpose(npimg, (1, 2, 0)))
+
+    def showlabels(labels, qtd):
+        for j in range(1, qtd + 1):
+            print('%10s' % CLASSES[int(labels[j - 1])], end='')
+
+            if j % 4 == 0:
+                print('\n')
+
+    images, labels = next(data_train)
+    print(images.shape)
+
+    imshow(torchvision.utils.make_grid(images.data[:16], nrow=4))
+    showlabels(labels, 16)
+
+
+
+
+.. image:: /beginner/images/sphx_glr_cifar10_tutorial_001.png
+    :align: center
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    torch.Size([64, 3, 32, 32])
+         horse     horse       dog     truck
+
+           car      deer       dog       cat
+
+         plane      deer     horse     plane
+
+         horse      bird       dog      ship
+
+
+3. Define a Convolution Neural Network
+--------------------------------------
+
+In this section, we’ll define the forward method of the Cogitare Model.
+In Cogitare, you must implement two methods in the model: **forward**
+and **loss**.
+
+This is a Convolutional Neural Network (CNN) for Image Classification.
+
+
+
+
+.. code-block:: python
+
+
+    class CNN(Model):
+    
+        def __init__(self):
+            super(CNN, self).__init__()
+            
+            self.conv1 = nn.Conv2d(3, 6, 5)
+            self.pool = nn.MaxPool2d(2, 2)
+            self.conv2 = nn.Conv2d(6, 16, 5)
+            self.fc1 = nn.Linear(16 * 5 * 5, 120)
+            self.fc2 = nn.Linear(120, 84)
+            self.fc3 = nn.Linear(84, 10)
+
+        def forward(self, batch):
+            # in this sample, each batch will be a tuple
+            # containing (input_batch, expected_batch)
+            # in forward in are only interested in input so that we 
+            # can ignore the second item of the tuple
+            x, _ = batch      
+        
+            x = F.dropout(x, args.dropout)
+            x = self.pool(F.relu(self.conv1(x)))
+            x = self.pool(F.relu(self.conv2(x)))
+            x = x.view(-1, 16 * 5 * 5)
+            x = F.relu(self.fc1(x))
+            x = F.relu(self.fc2(x))
+            x = self.fc3(x)
+
+            return F.log_softmax(x, dim=1)
+    
+        def loss(self, output, batch):
+            # in this sample, each batch will be a tuple 
+            # containing (input_batch, expected_batch)
+            # in loss in are only interested in expected so that
+            # we can ignore the first item of the tuple
+            _, expected = batch
+
+            return F.nll_loss(output, expected)
+
+
+
+
+
+
+
+
+The model class is simple; it only requires de forward and loss methods.
+By default, Cogitare will backward the loss returned by the loss()
+method, and optimize the model parameters.
+
+
+
+4. Training the Model
+---------------------
+
+We first define the model optimizer for training the model.
+
+
+
+
+.. code-block:: python
+
+
+    cnn = CNN()
+
+    optimizer = optim.Adam(cnn.parameters(), lr=args.learning_rate)
+
+
+
+
+
+
+
+
+We now add the default plugins to watch the training status. The default
+plugin includes:
+
+-  Progress bar per batch and epoch
+-  Plot training and validation losses (if validation_dataset is
+   present)
+-  Log training loss
+
+And some extra plugins.
+
+
+
+
+.. code-block:: python
+
+
+    cnn.register_default_plugins()
+
+    early = EarlyStopping(max_tries=5, path='/tmp/model.pt')
+    # after 5 epochs without decreasing the loss, stop the 
+    # training and the best model is saved at /tmp/model.pt
+
+    # the plugin will execute in the end of each epoch
+    cnn.register_plugin(early, 'on_end_epoch')
+
+
+
+
+
+
+
+
+We can now run the training:
+
+
+
+
+.. code-block:: python
+
+
+    if args.cuda:
+        cnn = cnn.cuda()
+
+    cnn.learn(data_train, optimizer, data_test, max_epochs=args.max_epochs)
+
+
+
+
+
+.. image:: /beginner/images/sphx_glr_cifar10_tutorial_002.png
+    :align: center
+
+
+
+
+5. Model Evaluation
+-------------------
+
+We now check the model loss and accuracy on the test set:
+
+
+
+
+.. code-block:: python
+
+
+    def model_accuracy(output, data):
+        _, indices = torch.max(output, 1)
+
+        return accuracy(indices, data[1])
+
+    # evaluate the model loss and accuracy over the validation dataset
+    metrics = cnn.evaluate_with_metrics(data_test, {'loss': cnn.metric_loss, 'accuracy': model_accuracy})
+
+    # the metrics is an dict mapping the metric name (loss or accuracy, in this sample) to a list of the accuracy output
+    # we have a measurement per batch. So, to have a value of the full dataset, we take the mean value:
+
+    metrics_mean = {'loss': 0, 'accuracy': 0}
+    for loss, acc in zip(metrics['loss'], metrics['accuracy']):
+        metrics_mean['loss'] += loss
+        metrics_mean['accuracy'] += acc.data[0]
+
+    qtd = len(metrics['loss'])
+
+    print('Loss: {}'.format(metrics_mean['loss'] / qtd))
+    print('Accuracy: {}'.format(metrics_mean['accuracy'] / qtd))
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    Loss: 1.2460897301252072
+    Accuracy: 0.5852363782051282
+
+
+5.1 Visualization
+~~~~~~~~~~~~~~~~~
+
+To check how the model behaves, we can plot the images, the expected and
+predicted labels
+
+
+
+
+.. code-block:: python
+
+
+    images, labels = next(data_test)
+
+    imshow(torchvision.utils.make_grid(images.data[:16], nrow=4))
+
+
+
+
+
+.. image:: /beginner/images/sphx_glr_cifar10_tutorial_003.png
+    :align: center
+
+
+
+
+We forward the data to get the model output to the batch above.
+
+
+
+
+.. code-block:: python
+
+
+    predicted = cnn.predict((images, None))
+    # remember that forward method expect a tuple, where the 
+    # first item contains the data to be passed in the net
+    predicted.shape
+
+    _, predicted_labels = torch.max(predicted, dim=1)
+    print('Predicted:\n')
+    showlabels(predicted_labels[:16], 16)
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out::
+
+    Predicted:
+
+          frog       dog      ship       dog
+
+         horse     horse      ship     horse
+
+         truck      deer      ship       car
+
+           dog       car     truck       dog
+
+
+**Total running time of the script:** ( 4 minutes  29.314 seconds)
+
+
+
+.. only :: html
+
+ .. container:: sphx-glr-footer
+
+
+  .. container:: sphx-glr-download
+
+     :download:`Download Python source code: cifar10_tutorial.py <cifar10_tutorial.py>`
+
+
+
+  .. container:: sphx-glr-download
+
+     :download:`Download Jupyter notebook: cifar10_tutorial.ipynb <cifar10_tutorial.ipynb>`
+
+
+.. only:: html
+
+ .. rst-class:: sphx-glr-signature
+
+    `Gallery generated by Sphinx-Gallery <https://sphinx-gallery.readthedocs.io>`_
