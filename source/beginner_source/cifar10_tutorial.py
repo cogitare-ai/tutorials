@@ -113,7 +113,7 @@ print(type(trainset.train_data))
 
 
 ######################################################################
-# Torchvision downloads loads the data as numpy arrays.
+# Torchvision loads the data as numpy arrays.
 # 
 # We now create two datasets to hold the train and test sets.
 # 
@@ -183,12 +183,7 @@ images, labels = next(data_train)
 print(images.shape)
 
 imshow(torchvision.utils.make_grid(images.data[:16], nrow=4))
-for j in range(1, 17):
-    print('%10s' % CLASSES[int(labels[j - 1])], end='')
-    
-    if j % 4 == 0:
-        print('\n')
-
+showlabels(labels, 16)
 
 ######################################################################
 # 3. Define a Convolution Neural Network
@@ -198,7 +193,7 @@ for j in range(1, 17):
 # In Cogitare, you must implement two methods in the model: **forward**
 # and **loss**.
 # 
-# This is a Convolutional Neural Networn (CNN) for Image Classification.
+# This is a Convolutional Neural Network (CNN) for Image Classification.
 # 
 
 class CNN(Model):
@@ -231,8 +226,10 @@ class CNN(Model):
         return F.log_softmax(x, dim=1)
     
     def loss(self, output, batch):
-        # in this sample, each batch will be a tuple containing (input_batch, expected_batch)
-        # in loss in are only interested in expected so that we can ignore the first item of the tuple
+        # in this sample, each batch will be a tuple 
+        # containing (input_batch, expected_batch)
+        # in loss in are only interested in expected so that
+        # we can ignore the first item of the tuple
         _, expected = batch
 
         return F.nll_loss(output, expected)
@@ -272,7 +269,8 @@ optimizer = optim.Adam(cnn.parameters(), lr=args.learning_rate)
 cnn.register_default_plugins()
 
 early = EarlyStopping(max_tries=5, path='/tmp/model.pt')
-# after 5 epochs without decreasing the loss, stop the training and the best model is saved at /tmp/model.pt
+# after 5 epochs without decreasing the loss, stop the 
+# training and the best model is saved at /tmp/model.pt
 
 # the plugin will execute in the end of each epoch
 cnn.register_plugin(early, 'on_end_epoch')
@@ -340,4 +338,5 @@ predicted = cnn.predict((images, None))
 predicted.shape
 
 _, predicted_labels = torch.max(predicted, dim=1)
+print('Predicted:\n')
 showlabels(predicted_labels[:16], 16)
